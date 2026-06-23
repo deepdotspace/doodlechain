@@ -14,6 +14,7 @@ import { RecordProvider, RecordScope } from 'deepspace'
 import { ToastProvider } from '../components/ui'
 import { APP_NAME, SCOPE_ID } from '../constants'
 import { schemas } from '../schemas'
+import { MuteToggle } from '../game/music'
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
             <Suspense fallback={<BootLoading />}>
               <Outlet />
             </Suspense>
+            <MuteToggle />
           </div>
         </AuthBoot>
       </DeepSpaceAuthProvider>

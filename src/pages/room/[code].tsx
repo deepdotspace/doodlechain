@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useDoodleChain, readStoredName, storeName } from '../../game/useDoodleChain'
+import { useMusic } from '../../game/music'
 import { normalizeRoomCode, isValidRoomCode } from '../../game/code'
 import { MAX_NAME_LENGTH } from '../../game/config'
 import { Logo, Mascot } from '../../game/ui/bits'
@@ -23,6 +24,7 @@ export default function Room() {
 
 function RoomInner({ code, name }: { code: string; name: string }) {
   const game = useDoodleChain(code, name)
+  useMusic(game.state.phase, game.connected)
 
   if (!game.connected) {
     return (

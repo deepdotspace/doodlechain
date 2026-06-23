@@ -4,8 +4,10 @@ import { Logo, Mascot } from '../game/ui/bits'
 import { isValidRoomCode, makeRoomCode, normalizeRoomCode } from '../game/code'
 import { readStoredName, storeName } from '../game/useDoodleChain'
 import { MAX_NAME_LENGTH } from '../game/config'
+import { useMusic } from '../game/music'
 
 export default function Home() {
+  useMusic('LOBBY', true)
   const navigate = useNavigate()
   const [name, setName] = useState(readStoredName())
   const [code, setCode] = useState('')

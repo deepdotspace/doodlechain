@@ -24,7 +24,7 @@ Real-time sync, the database, and hosting all come from DeepSpace, so there's no
 3. Each player writes a short starting prompt. Then the "books" pass around the table: you draw the prompt you were handed, the next player guesses your drawing in words, the next draws that guess, and so on until every book has visited everyone.
 4. The reveal plays each chain back as a slideshow, so the whole room can see how "a cowboy octopus on a skateboard" turned into something unrecognizable.
 
-Best with 4 to 16 players on laptops with a voice call running in another window.
+Best with 2 to 10 players on laptops with a voice call running in another window. A round takes about five minutes.
 
 ## Commands
 
@@ -45,6 +45,10 @@ A DeepSpace app on Cloudflare Workers. Each room is a real-time Durable Object: 
 - **Smoke + API** (Playwright): the landing, room creation, and worker API.
 - **Unit** (vitest): the chain-rotation invariants and game logic.
 - `npm run type-check` runs `tsc --noEmit`.
+
+## Credits
+
+Background music by Kevin MacLeod (incompetech.com), licensed under Creative Commons Attribution 4.0. Full attribution in [CREDITS.md](CREDITS.md). A mute toggle is always in the corner.
 
 ## License
 
