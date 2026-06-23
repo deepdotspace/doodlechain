@@ -1,0 +1,15 @@
+node_modules
+dist
+.wrangler
+.dev.vars
+.worker-bundle.js
+*.tgz
+AGENT_LOG.md
+FINDINGS.md
+
+# Build references + design docs — not part of the shipped app
+_reference/
+docs/
+PRODUCT.md
+test-results/
+playwright-report/

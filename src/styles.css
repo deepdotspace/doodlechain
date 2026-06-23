@@ -1,0 +1,151 @@
+@import "tailwindcss" source(none);
+
+/* Scan local source + SDK components for Tailwind class usage */
+@source "./**/*.{ts,tsx}";
+@source "../node_modules/deepspace/dist/**/*.js";
+
+/*
+ * Doodle Chain — a single, baked, light "paper" theme. See
+ * docs/founder/phase3/design-bible.md. Tokens map the shadcn names (so the
+ * scaffold UI primitives stay legible) plus a small `--game-*` set the game
+ * surfaces use for their bolder palette.
+ */
+@theme {
+  --font-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+  --font-hand: 'Caveat', 'Bricolage Grotesque', cursive;
+  --font-body: 'Nunito', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Nunito', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Nunito', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* shadcn core — paper light */
+  --color-background: #f7f1e2;
+  --color-foreground: #1c1a17;
+  --color-card: #ffffff;
+  --color-card-foreground: #1c1a17;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1c1a17;
+  --color-primary: #e8553b;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #efe7d3;
+  --color-secondary-foreground: #1c1a17;
+  --color-muted: #efe7d3;
+  --color-muted-foreground: #6f6757;
+  --color-accent: #f3ead6;
+  --color-accent-foreground: #1c1a17;
+  --color-destructive: #d4452f;
+  --color-destructive-foreground: #ffffff;
+  --color-border: rgba(28, 26, 23, 0.16);
+  --color-input: rgba(28, 26, 23, 0.22);
+  --color-ring: #e8553b;
+  --radius: 0.85rem;
+
+  --color-success: #2d8a6d;
+  --color-success-foreground: #ffffff;
+  --color-warning: #d98a2b;
+  --color-warning-foreground: #ffffff;
+  --color-info: #3b6fd4;
+  --color-info-foreground: #ffffff;
+
+  --shadow-card: 0 1px 2px 0 rgba(28, 26, 23, 0.10);
+  --shadow-card-hover: 0 2px 8px 0 rgba(28, 26, 23, 0.14);
+
+  /* Game palette (also the player chip + drawing colors). */
+  --game-ink: #1c1a17;
+  --game-bg: #f7f1e2;
+  --game-panel: #ffffff;
+  --game-primary: #e8553b;   /* coral */
+  --game-secondary: #2d8a6d; /* pine */
+  --game-accent: #f2a93b;    /* marigold */
+  --game-cobalt: #3b6fd4;
+  --game-grape: #7a52d6;
+  --game-magenta: #c0418f;
+  --game-text: #1c1a17;
+}
+
+/* ── shadcn animation utilities (used by the UI primitives) ── */
+@keyframes animate-in { from { opacity: var(--tw-enter-opacity, 1); transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0) scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), 1) rotate(var(--tw-enter-rotate, 0)); } }
+@keyframes animate-out { to { opacity: var(--tw-exit-opacity, 1); transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0) scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), 1) rotate(var(--tw-exit-rotate, 0)); } }
+@utility animate-in { animation-name: animate-in; animation-duration: 150ms; --tw-enter-opacity: initial; --tw-enter-scale: initial; --tw-enter-translate-x: initial; --tw-enter-translate-y: initial; --tw-enter-rotate: initial; }
+@utility animate-out { animation-name: animate-out; animation-duration: 150ms; --tw-exit-opacity: initial; --tw-exit-scale: initial; --tw-exit-translate-x: initial; --tw-exit-translate-y: initial; --tw-exit-rotate: initial; }
+@utility fade-in-0 { --tw-enter-opacity: 0; }
+@utility fade-out-0 { --tw-exit-opacity: 0; }
+@utility zoom-in-95 { --tw-enter-scale: .95; }
+@utility zoom-out-95 { --tw-exit-scale: .95; }
+@utility slide-in-from-top-2 { --tw-enter-translate-y: -0.5rem; }
+@utility slide-in-from-bottom-2 { --tw-enter-translate-y: 0.5rem; }
+@utility slide-in-from-left-2 { --tw-enter-translate-x: -0.5rem; }
+@utility slide-in-from-right-2 { --tw-enter-translate-x: 0.5rem; }
+@utility slide-out-to-top-2 { --tw-exit-translate-y: -0.5rem; }
+
+/* ── Doodle Chain surfaces ── */
+
+/* Paper background — cream with a faint dot grid + warm corner washes. */
+@utility paper-grain {
+  background-color: var(--game-bg);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% -10%, color-mix(in srgb, var(--game-primary) 9%, transparent), transparent 60%),
+    radial-gradient(ellipse 70% 60% at 105% 110%, color-mix(in srgb, var(--game-secondary) 9%, transparent), transparent 55%),
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--game-ink) 9%, transparent) 1px, transparent 0);
+  background-size: 100% 100%, 100% 100%, 22px 22px;
+}
+
+/* Sticker shadow — hard offset ink edge, like a vinyl sticker on paper. */
+@utility sticker-stamp { box-shadow: 5px 5px 0 0 var(--game-ink), 0 14px 24px -12px color-mix(in srgb, var(--game-ink) 28%, transparent); }
+@utility sticker-stamp-sm { box-shadow: 3px 3px 0 0 var(--game-ink), 0 7px 14px -9px color-mix(in srgb, var(--game-ink) 22%, transparent); }
+
+/* Intentional, fixed tilts (never random). */
+@utility tilt-l { transform: rotate(-1.5deg); }
+@utility tilt-r { transform: rotate(1.4deg); }
+@utility tilt-l-sm { transform: rotate(-0.8deg); }
+@utility tilt-r-sm { transform: rotate(0.8deg); }
+
+@utility scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; &::-webkit-scrollbar { display: none; } }
+
+@keyframes pulse-glow { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; } 50% { opacity: 0.82; box-shadow: 0 0 14px 2px currentColor; } }
+@utility pulse-glow { animation: pulse-glow 1.4s ease-in-out infinite; }
+
+@keyframes float-slow { 0% { transform: translateY(0) rotate(-1.5deg); } 50% { transform: translateY(-7px) rotate(1.5deg); } 100% { transform: translateY(0) rotate(-1.5deg); } }
+@keyframes pop-bounce { 0% { opacity: 0; transform: translateY(6px) scale(0.96); } 60% { transform: translateY(-2px) scale(1.02); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes wobble { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@utility animate-float { animation: float-slow 5s ease-in-out infinite; }
+@utility animate-pop { animation: pop-bounce 0.28s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+@utility animate-wobble { animation: wobble 2.4s ease-in-out infinite; }
+
+.font-display { font-family: var(--font-display); }
+.font-hand { font-family: var(--font-hand); }
+
+/* Sticker button — chunky ink border + hard shadow that depresses on press. */
+.btn-sticker {
+  position: relative;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 800;
+  border: 3px solid var(--game-ink);
+  border-radius: 14px;
+  box-shadow: 4px 4px 0 var(--game-ink);
+  transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+.btn-sticker:hover:not(:disabled) { transform: translate(1px, 1px); box-shadow: 3px 3px 0 var(--game-ink); }
+.btn-sticker:active:not(:disabled) { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--game-ink); }
+.btn-sticker:disabled { cursor: not-allowed; opacity: 0.5; }
+
+/* Ink panel — white card with a chunky ink border. */
+.ink-panel { background: var(--game-panel); border: 3px solid var(--game-ink); border-radius: 18px; }
+
+@layer base {
+  html { color-scheme: light; }
+  html, body, #root { min-height: 100vh; background-color: var(--game-bg); }
+  body {
+    font-family: var(--font-body);
+    color: var(--color-foreground);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* Tailwind v4 reset drops the pointer cursor on buttons; restore it. */
+  button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+  a, button, [role="button"], input, select, textarea { touch-action: manipulation; }
+  ::selection { background-color: var(--game-primary); color: #fff; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { border-radius: 8px; background-color: color-mix(in srgb, var(--game-ink) 22%, transparent); }
+}
