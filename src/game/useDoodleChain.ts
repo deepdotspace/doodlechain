@@ -14,7 +14,7 @@
  * server-authoritative (the DO tick loop), so a missing host never freezes play.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { useGameRoom } from 'deepspace'
 import { createInitialState } from './engine'
 import { assignedChainOrder } from './rotation'
@@ -87,35 +87,34 @@ export interface UseDoodleChain {
 
 export function useDoodleChain(roomId: string, name: string): UseDoodleChain {
   const cid = useMemo(() => readCid(), [])
-  const { state, players: rawPlayers, connected, sendInput, startGame } = useGameRoom(roomId)
+  const { state, connected, canWrite, sendInput, startGame } = useGameRoom(roomId)
   const gs = useMemo(() => coerceState(state), [state])
 
-  // Power on the DO tick loop as soon as we connect. The loop is what makes
-  // phase advancement server-authoritative; it must run continuously while
-  // anyone is in the room (not just during an active game), so the lobby
-  // roster syncs and timers fire regardless of any single tab. startGame is
-  // idempotent server-side (no-op if already running) and re-arms the loop if
-  // a previous emptying of the room stopped it.
-  const started = useRef(false)
-  useEffect(() => {
-    if (!connected) {
-      started.current = false
-      return
-    }
-    if (started.current) return
-    started.current = true
-    startGame()
-  }, [connected, startGame])
+  // Every send is gated on `canWrite`, which the server grants (via its AUTH
+  // message) a beat AFTER the socket opens and `connected` flips true. Firing
+  // our join sends on `connected` alone races that grant: a send issued in the
+  // gap is silently dropped and, since we'd think it already went out, never
+  // retried — which used to strand a joiner with no seat. So we gate on
+  // `canWrite` (which implies `connected`) and let these effects re-run on the
+  // next grant, i.e. after every reconnect.
 
-  // (Re)send our name+cid whenever we (re)connect or the name changes.
-  const lastSent = useRef<string>('')
+  // Power on the DO tick loop as soon as we can write. The loop makes phase
+  // advancement server-authoritative; it must run while anyone is in the room
+  // (not just during an active game) so the lobby roster syncs and timers fire
+  // regardless of any single tab. startGame is idempotent server-side (no-op if
+  // already running) and re-arms the loop if a previous emptying stopped it.
   useEffect(() => {
-    if (!connected || !name) return
-    const sig = `${name}::${cid}`
-    if (lastSent.current === sig) return
-    lastSent.current = sig
+    if (!canWrite) return
+    startGame()
+  }, [canWrite, startGame])
+
+  // (Re)send our name+cid whenever we gain write access (initial connect AND
+  // every reconnect — a reconnect mints a fresh anon userId, so re-sending the
+  // same cid re-links us to our existing seat) or the chosen name changes.
+  useEffect(() => {
+    if (!canWrite || !name) return
     sendInput('SET_NAME', { name, cid })
-  }, [connected, name, cid, sendInput, rawPlayers.length])
+  }, [canWrite, name, cid, sendInput])
 
   const me = useMemo(
     () => Object.values(gs.players).find((p) => p.cid === cid && cid !== '') ?? null,
@@ -134,13 +133,13 @@ export function useDoodleChain(roomId: string, name: string): UseDoodleChain {
   // Auto-claim a vacant host seat (earliest-joined connected named player) so the
   // lobby / slideshow controls always have an owner.
   useEffect(() => {
-    if (!connected || !me) return
+    if (!canWrite || !me) return
     const host = Object.values(gs.players).find((p) => p.cid === gs.hostCid)
     const vacant = !gs.hostCid || !host?.connected
     if (!vacant) return
     const earliest = players.find((p) => p.cid !== '')
     if (earliest && earliest.cid === me.cid) sendInput('CLAIM_HOST', {})
-  }, [connected, me, gs.hostCid, gs.players, players, sendInput])
+  }, [canWrite, me, gs.hostCid, gs.players, players, sendInput])
 
   const seat = useMemo(
     () => (me ? gs.chains.findIndex((c) => c.ownerCid === me.cid) : -1),
