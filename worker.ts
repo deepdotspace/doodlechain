@@ -27,10 +27,29 @@ import { schemas } from './src/schemas.js'
 import { integrations } from './src/integrations.js'
 import { reduce, createInitialState } from './src/game/engine.js'
 import { STATE_VERSION } from './src/game/types.js'
-import type { EngineInput, GameState, RosterEntry } from './src/game/types.js'
+import type { EngineInput, GameState, PlayerState, RosterEntry } from './src/game/types.js'
 import { MAX_PLAYERS } from './src/game/config.js'
-import { assignedChainOrder } from './src/game/rotation.js'
-import { botPrompt, botGuess, botDrawing } from './src/game/bots.js'
+import {
+  BOT_MODEL,
+  BOT_MAX_TOKENS_DRAW,
+  BOT_MAX_TOKENS_TEXT,
+  BOT_THINK_MS,
+  ROOM_BOT_LIFETIME,
+  DAILY_BOT_CAP,
+  botDrawing,
+  botGuess,
+  botPrompt,
+  botTurn,
+  strHash,
+  parseStrokesJson,
+  sanitizeBotLine,
+  tryReserve,
+  DRAW_SYSTEM,
+  INVENT_PROMPT_SYSTEM,
+  buildDrawUser,
+  buildInventPromptUser,
+} from './src/game/bots.js'
+import type { BotTurn, BudgetCell } from './src/game/bots.js'
 
 // =============================================================================
 // DO Manifest — declares all Durable Objects for dynamic deploy bindings
@@ -44,6 +63,7 @@ export const __DO_MANIFEST__ = [
   { binding: 'CRON_ROOMS', className: 'AppCronRoom', sqlite: true },
   { binding: 'JOB_ROOMS', className: 'AppJobRoom', sqlite: true },
   { binding: 'GAME_ROOMS', className: 'AppGameRoom', sqlite: true },
+  { binding: 'BUDGET_ROOM', className: 'AppBudgetRoom', sqlite: true },
 ] as const satisfies DOManifest
 
 // =============================================================================
@@ -99,6 +119,30 @@ export class AppJobRoom extends JobRoom<Env> {
 }
 
 /**
+ * AppBudgetRoom — the global daily budget DO (the abuse backstop).
+ *
+ * A single instance (idFromName('global')) shared by every game room. Before
+ * each owner-billed bot generation the GameRoom asks it to reserve(1). Because a
+ * DO serializes its requests through the input gate, the read-modify-write here
+ * is atomic — no race overspend even under high concurrency. DAILY_BOT_CAP
+ * bounds worst-case owner spend regardless of how many rooms exist; it resets at
+ * UTC midnight. On deny the caller uses a canned doodle and makes no call. The
+ * counter math lives in the pure, unit-tested `tryReserve` helper.
+ */
+export class AppBudgetRoom {
+  constructor(private state: DurableObjectState) {}
+
+  async fetch(req: Request): Promise<Response> {
+    const n = Math.max(0, Math.min(8, Number(new URL(req.url).searchParams.get('n') ?? '1') || 0))
+    const day = new Date().toISOString().slice(0, 10) // UTC day (Date is fine in a DO)
+    const cur = await this.state.storage.get<BudgetCell>('c')
+    const { cell, allowed } = tryReserve(cur, day, n, DAILY_BOT_CAP)
+    if (allowed) await this.state.storage.put('c', cell)
+    return Response.json({ allowed, used: cell.used, cap: DAILY_BOT_CAP })
+  }
+}
+
+/**
  * AppGameRoom — the Doodle Chain game loop. All game logic lives in the pure,
  * unit-tested reducer in `src/game/engine.ts`; this DO is thin glue: each tick
  * it hands the SDK's connected-player roster + buffered inputs to `reduce` and
@@ -108,11 +152,32 @@ export class AppJobRoom extends JobRoom<Env> {
  * (driven by its own alarm), so timers fire and rounds advance even if every
  * client tab closes. There is no host-tab dependency.
  *
- * It also DRIVES the optional AI bots — offline, zero-cost canned content
- * (`src/game/bots.ts`), staged as ordinary SUBMIT_* inputs a human would send.
- * Bots "think" for a beat before acting so humans always get time in a phase.
+ * It also DRIVES the AI bots. Bots DRAW with a cheap LLM (Haiku) so their doodle
+ * reflects the prompt, and WRITE their seed prompts with the LLM too; guesses
+ * stay a free canned quip. The LLM call is fire-and-forget — an LLM call is
+ * ~1-10s and must never stall the serial tick loop — so results land in
+ * `this.ready` and apply as ordinary SUBMIT_* inputs on a later tick. Spend is
+ * bounded three ways: at least one connected human, a per-room lifetime cap, and
+ * the global daily cap (AppBudgetRoom). Every failure path falls back to offline
+ * canned content, so a round never hangs on the model.
  */
 export class AppGameRoom extends GameRoom<Env> {
+  /**
+   * Bot outputs staged on a prior tick, tagged with the round + phase they were
+   * generated for. On drain we drop any whose tag no longer matches the current
+   * state, so a slow in-flight generation from a round that has since advanced
+   * (e.g. a host skip) can never land on the wrong chain.
+   */
+  private ready: Array<{ round: number; phase: string; input: EngineInput }> = []
+  /** `${round}:${phase}:${botId}` with an AI generation in flight — one at a time per turn. */
+  private inFlight = new Set<string>()
+  /**
+   * Billed generations this DO liveness session (in-memory; resets on hibernate).
+   * A soft damper on a play-again-looping room; the hard, durable spend ceiling
+   * is the global daily cap in AppBudgetRoom.
+   */
+  private roomBotGens = 0
+
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, { tickRate: 2, minPlayers: 1, maxPlayers: MAX_PLAYERS })
   }
@@ -127,13 +192,17 @@ export class AppGameRoom extends GameRoom<Env> {
       userName: p.userName,
     }))
     const cur = this.coerce(state)
-    const now = Date.now()
-    const botInputs = computeBotInputs(cur, now)
+    // Apply bot outputs staged on a previous tick — but only those still valid
+    // for the current round + phase; drop any the game has already moved past.
+    const staged = this.ready
+      .filter((r) => r.round === cur.round && r.phase === cur.phase)
+      .map((r) => r.input)
+    this.ready = []
     const merged =
-      botInputs.length > 0
-        ? [...(inputs as unknown as EngineInput[]), ...botInputs]
-        : (inputs as unknown as EngineInput[])
-    const next = reduce(cur, merged, now, roster)
+      staged.length > 0 ? [...staged, ...(inputs as unknown as EngineInput[])] : (inputs as unknown as EngineInput[])
+    const next = reduce(cur, merged, Date.now(), roster)
+    // Fire-and-forget bot driving off the freshest state; never awaited here.
+    this.driveBots(next ?? cur)
     return (next ?? undefined) as Record<string, unknown> | undefined
   }
 
@@ -148,24 +217,144 @@ export class AppGameRoom extends GameRoom<Env> {
     }
     return createInitialState()
   }
-}
 
-// =============================================================================
-// Bot driver — stage canned bot inputs for the active phase (offline, no AI)
-// =============================================================================
+  // ---------------------------------------------------------------------------
+  // Bot driver
+  // ---------------------------------------------------------------------------
 
-const BOT_THINK_MS = 2600
+  /**
+   * Decide + launch bot work for the current phase. Guesses are a free canned
+   * quip staged directly; draws and prompts are AI, launched fire-and-forget
+   * with exactly one call in flight per turn. Never awaited by onTick.
+   */
+  private driveBots(cur: GameState): void {
+    if (cur.phase !== 'PROMPT' && cur.phase !== 'DRAW' && cur.phase !== 'GUESS') return
+    if (cur.phaseEndsAt === null) return
+    const bots = Object.values(cur.players).filter((p) => p.isBot)
+    if (bots.length === 0) return
+    // Guard: never call the model for a room with no connected human (no bot farms).
+    if (!Object.values(cur.players).some((p) => !p.isBot && p.connected)) return
 
-function strHash(s: string): number {
-  let h = 2166136261
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 16777619)
+    const now = Date.now()
+    const phaseStart = cur.phaseEndsAt - phaseDurationMs(cur)
+    for (const bot of bots) {
+      const turn = botTurn(cur, bot)
+      if (!turn) continue
+      // Let humans see the phase first; stagger bots a touch so they don't all fire at once.
+      if (now < phaseStart + BOT_THINK_MS + (strHash(bot.userId) % 2000)) continue
+
+      // Guesses: free canned quip, staged directly (applied next tick).
+      if (turn.phase === 'GUESS') {
+        this.stage(turn, {
+          userId: bot.userId,
+          action: 'SUBMIT_GUESS',
+          data: { text: botGuess(strHash(`${bot.userId}:g:${turn.round}`)) },
+        })
+        continue
+      }
+
+      // Draw + prompt: AI, fire-and-forget, exactly one call in flight per turn.
+      const key = `${turn.round}:${turn.phase}:${bot.userId}`
+      if (this.inFlight.has(key)) continue
+      this.inFlight.add(key)
+      void this.generate(bot, turn, key)
+    }
   }
-  return Math.abs(h | 0)
+
+  /** Generate one bot's step and stage it; always stages something (canned on any failure). */
+  private async generate(bot: PlayerState, turn: BotTurn, key: string): Promise<void> {
+    const seed = strHash(`${bot.userId}:${turn.round}`)
+    try {
+      const content = await this.botContent(bot, turn, seed)
+      this.stage(
+        turn,
+        turn.phase === 'PROMPT'
+          ? { userId: bot.userId, action: 'SUBMIT_PROMPT', data: { text: content } }
+          : { userId: bot.userId, action: 'SUBMIT_DRAWING', data: { strokes: content } },
+      )
+    } catch {
+      // Last-ditch: never leave a bot silently owing a turn.
+      this.stage(
+        turn,
+        turn.phase === 'PROMPT'
+          ? { userId: bot.userId, action: 'SUBMIT_PROMPT', data: { text: botPrompt(seed) } }
+          : { userId: bot.userId, action: 'SUBMIT_DRAWING', data: { strokes: botDrawing(seed) } },
+      )
+    } finally {
+      this.inFlight.delete(key)
+    }
+  }
+
+  /** Stage a bot output tagged with the turn it belongs to (see `ready`). */
+  private stage(turn: BotTurn, input: EngineInput): void {
+    this.ready.push({ round: turn.round, phase: turn.phase, input })
+  }
+
+  /** The AI content for a draw/prompt turn, behind the spend guards; canned on any denial/failure. */
+  private async botContent(_bot: PlayerState, turn: BotTurn, seed: number): Promise<string> {
+    const fallback = () => (turn.phase === 'PROMPT' ? botPrompt(seed) : botDrawing(seed))
+
+    if (this.roomBotGens >= ROOM_BOT_LIFETIME) return fallback()
+    if (!(await this.reserve(1))) return fallback()
+    this.roomBotGens++
+
+    try {
+      if (turn.phase === 'PROMPT') {
+        const text = sanitizeBotLine(
+          await this.callLLM(INVENT_PROMPT_SYSTEM, buildInventPromptUser(seed), BOT_MAX_TOKENS_TEXT),
+        )
+        return text.length > 0 ? text : fallback()
+      }
+      const raw = await this.callLLM(DRAW_SYSTEM, buildDrawUser(turn.source), BOT_MAX_TOKENS_DRAW)
+      return parseStrokesJson(raw) ?? fallback()
+    } catch {
+      return fallback()
+    }
+  }
+
+  /** One owner-billed Anthropic call, bounded by a timeout so a hung call falls back. */
+  private async callLLM(system: string, user: string, maxTokens: number): Promise<string> {
+    const res = await withTimeout(
+      apiWorkerFetch(this.env, '/api/integrations/anthropic/chat-completion', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.env.APP_OWNER_JWT}`,
+        },
+        body: JSON.stringify({
+          model: BOT_MODEL,
+          max_tokens: maxTokens,
+          system,
+          messages: [{ role: 'user', content: user }],
+        }),
+      }),
+      LLM_TIMEOUT_MS,
+    )
+    const j: {
+      data?: { content?: Array<{ text?: string }> }
+      content?: Array<{ text?: string }>
+    } = await res.json()
+    return (j?.data?.content?.[0]?.text ?? j?.content?.[0]?.text ?? '').trim()
+  }
+
+  /** Reserve one generation from the global daily budget DO; false → use canned. */
+  private async reserve(n: number): Promise<boolean> {
+    try {
+      const stub = this.env.BUDGET_ROOM.get(this.env.BUDGET_ROOM.idFromName('global'))
+      const r = (await (await stub.fetch(`https://budget/reserve?n=${n}`, { method: 'POST' })).json()) as {
+        allowed?: boolean
+      }
+      return r.allowed === true
+    } catch {
+      return false
+    }
+  }
 }
 
-function activePhaseDurationMs(s: GameState): number {
+/** Milliseconds a bot LLM call may take before we give up and use a canned fallback. */
+const LLM_TIMEOUT_MS = 12_000
+
+function phaseDurationMs(s: GameState): number {
   switch (s.phase) {
     case 'PROMPT':
       return s.config.promptSeconds * 1000
@@ -178,31 +367,12 @@ function activePhaseDurationMs(s: GameState): number {
   }
 }
 
-/** One SUBMIT_* input per bot that owes a step this round and has "thought" long enough. */
-function computeBotInputs(s: GameState, now: number): EngineInput[] {
-  if (s.phase !== 'PROMPT' && s.phase !== 'DRAW' && s.phase !== 'GUESS') return []
-  if (s.phaseEndsAt === null) return []
-  const phaseStart = s.phaseEndsAt - activePhaseDurationMs(s)
-  const out: EngineInput[] = []
-  for (const bot of Object.values(s.players)) {
-    if (!bot.isBot) continue
-    const jitter = strHash(bot.userId) % 2200
-    if (now < phaseStart + BOT_THINK_MS + jitter) continue
-    const seat = s.chains.findIndex((c) => c.ownerCid === bot.cid)
-    if (seat < 0) continue
-    const round = s.round
-    const chainOrder = s.phase === 'PROMPT' ? seat : assignedChainOrder(seat, round, s.seatCount)
-    if (s.chains[chainOrder]?.steps[round]) continue // already submitted
-    const seed = strHash(`${bot.userId}:${round}`)
-    if (s.phase === 'PROMPT') {
-      out.push({ userId: bot.userId, action: 'SUBMIT_PROMPT', data: { text: botPrompt(seed) } })
-    } else if (s.phase === 'DRAW') {
-      out.push({ userId: bot.userId, action: 'SUBMIT_DRAWING', data: { strokes: botDrawing(seed) } })
-    } else {
-      out.push({ userId: bot.userId, action: 'SUBMIT_GUESS', data: { text: botGuess(seed) } })
-    }
-  }
-  return out
+/** Resolve `p`, or reject after `ms` (bounds a hung upstream call). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ])
 }
 
 // =============================================================================
@@ -248,6 +418,14 @@ export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    * they are the JWT subject.
    */
   APP_OWNER_JWT: string
+  /**
+   * Singleton budget DO (idFromName('global')). The GameRoom bot driver asks it
+   * to reserve(1) before every owner-billed bot generation; it serializes
+   * requests so the daily-cap read-modify-write is race-free. The load-bearing
+   * abuse backstop. Typed via the DO manifest's DOBindings; declared here too
+   * for documentation.
+   */
+  BUDGET_ROOM: DurableObjectNamespace
   /**
    * When set to "true", the app worker exposes /api/debug/* (set-role,
    * sql, query, records, status) by forwarding to the RecordRoom DO's
