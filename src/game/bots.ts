@@ -1,38 +1,25 @@
 /**
  * Bot content for Doodle Chain.
  *
- * Bots draw with AI now. The DO hands a cheap LLM (Haiku) the prompt a bot is
- * meant to draw and asks for stroke JSON, so a bot's doodle actually reflects
- * the prompt instead of always scribbling the same blobby face. The prompts a
- * bot writes (the seeds humans then draw) are AI-written too. Guesses stay
- * canned — a guess unrelated to the drawing is indistinguishable from a random
- * quip, and skipping that call keeps cost down.
+ * Bots draw by serving a real human doodle that matches the prompt (see
+ * `doodles.ts` — a curated Google "Quick, Draw!" pack). This module is the PURE,
+ * SDK-free rest of the bot brain: names, the canned prompts a bot writes (the
+ * seeds humans then draw), canned guesses, the offline fallback doodle, and the
+ * seat math that says what a bot owes this turn. The DO (AppGameRoom) drives it.
  *
- * This is a PURE module (no SDK, no DO): prompt builders, output parsing +
- * validation, the offline canned fallbacks, and the budget counter math. The DO
- * (AppGameRoom) owns the fire-and-forget call and the spend guards. Every AI
- * path has a canned fallback (bad JSON, denied budget, network error, timeout)
- * so a round never hangs on the model.
+ * There is no LLM here (or anywhere in the bot path) — an LLM drawing blind
+ * renders as scribble, and a curated human-doodle library looks far better for
+ * free. Bot prompts/guesses are canned because a random quip is indistinguishable
+ * from a "smart" one and skipping the call keeps the game instant and offline.
  */
 
 import type { GameState, PlayerState, Stroke } from './types'
 import { assignedChainOrder } from './rotation'
-import { MAX_TEXT_LENGTH } from './config'
 
-// --- Model + guard constants ------------------------------------------------
+// --- Timing -----------------------------------------------------------------
 
-/** Cheapest capable model; bot doodles are meant to be rough, so Haiku is plenty. */
-export const BOT_MODEL = 'claude-haiku-4-5'
-/** Stroke JSON is a few hundred tokens; leave headroom without inviting essays. */
-export const BOT_MAX_TOKENS_DRAW = 900
-/** A one-line prompt. */
-export const BOT_MAX_TOKENS_TEXT = 40
 /** Bots wait this long into a phase before acting, so humans see the phase first. */
 export const BOT_THINK_MS = 2600
-/** Per-room lifetime cap on billed generations — bounds a play-again-looping room. */
-export const ROOM_BOT_LIFETIME = 200
-/** Global daily cap on billed generations — the abuse backstop (resets UTC midnight). */
-export const DAILY_BOT_CAP = 2000
 
 // --- Names ------------------------------------------------------------------
 
@@ -42,26 +29,31 @@ export function botName(i: number): string {
   return BOT_NAMES[i % BOT_NAMES.length]
 }
 
-// --- Canned fallbacks (used when AI is unavailable / denied / malformed) -----
+// --- Canned prompts + guesses -----------------------------------------------
 
+/**
+ * Prompts a bot writes as chain seeds. Each names a concrete noun the doodle pack
+ * covers, so when the next player (or another bot) draws it, a matching human
+ * doodle is available.
+ */
 const PROMPTS = [
   'a cat DJing at a party',
-  'a banana riding a unicycle',
+  'a banana riding a bicycle',
   'a grumpy cloud raining on one person',
-  'a frog wearing sunglasses',
-  'a robot walking a snail',
-  'a pirate afraid of water',
+  'a frog wearing a crown',
+  'a dog walking a snail',
+  'a shark playing the guitar',
   'a cactus giving a hug',
   'an owl delivering pizza',
   'a snowman on vacation',
-  'a turtle racing a rocket',
-  'a duck running for president',
+  'a hot air balloon racing a duck',
+  'a penguin running for president',
   'a spider knitting a sweater',
 ]
 
 const GUESSES = [
   'a happy dog',
-  'a confused robot',
+  'a confused octopus',
   'a dancing tree',
   'a sandwich with legs',
   'a sleepy dragon',
@@ -69,8 +61,8 @@ const GUESSES = [
   'a melting ice cream',
   'a tiny angry bird',
   'a wizard cat',
-  'a haunted toaster',
-  'a brave little ghost',
+  'a haunted castle',
+  'a brave little mouse',
   'a flying potato',
 ]
 
@@ -89,7 +81,8 @@ export function botGuess(seed: number): string {
 
 /**
  * The offline fallback doodle — a loose blobby creature — as a JSON strokes
- * string in the canvas wire format. Only used when the AI path is unavailable.
+ * string in the canvas wire format. Only used if the doodle pack is somehow
+ * empty; the normal path serves a real human doodle (see `botDoodle`).
  */
 export function botDrawing(seed: number): string {
   const colors = ['#e8553b', '#2d8a6d', '#3b6fd4', '#c0418f', '#f2a93b', '#7a52d6']
@@ -149,108 +142,4 @@ export function botTurn(s: GameState, bot: PlayerState): BotTurn | null {
   if (!chain || chain.steps[round]) return null // no such chain / already submitted
   const source = round > 0 ? chain.steps[round - 1]?.content ?? '' : ''
   return { phase: s.phase, round, source }
-}
-
-// --- LLM prompt builders ----------------------------------------------------
-
-export const DRAW_SYSTEM = [
-  'You are a player in a fast, casual doodle party game (like drawing telephone).',
-  'You will be given a short prompt to DRAW. Reply with ONLY a JSON array of pen',
-  'strokes — no prose, no markdown, no code fences.',
-  '',
-  'Each stroke is an object:',
-  '{"color":"#RRGGBB","width":6,"points":[x0,y0,x1,y1,...]}',
-  '- x and y are decimals from 0 to 1 (0,0 = top-left, 1,1 = bottom-right).',
-  '- width is 2 to 40.',
-  '- points is at least two (x,y) pairs; more pairs make a longer curved line.',
-  '',
-  'Rules:',
-  '- Use 4 to 14 strokes. Keep everything within 0.1..0.9 so nothing clips.',
-  '- Make it clearly READ as the prompt, but rough and quick, like a person',
-  '  doodling in 30 seconds. Simple shapes, a few colors.',
-  '- Do NOT draw any letters, words, or numbers.',
-  '- Output the JSON array and nothing else.',
-].join('\n')
-
-export function buildDrawUser(subject: string): string {
-  const s = subject.trim()
-  return `Draw: ${s.length > 0 ? s : 'a friendly little monster'}`
-}
-
-export const INVENT_PROMPT_SYSTEM = [
-  'You write a single short, funny, drawable prompt for a doodle party game — the',
-  'kind of silly scene the next player will have to draw. Output ONLY the prompt:',
-  '3 to 8 words, lowercase, no quotes, no trailing punctuation. Make it concrete',
-  'and visual — a character or object doing something — never abstract.',
-].join('\n')
-
-export function buildInventPromptUser(seed: number): string {
-  // Vary the nudge so repeated calls in a room don't collapse to one idea.
-  const nudges = ['an animal', 'a food', 'a robot or machine', 'a monster', 'a everyday object', 'a job or hobby']
-  return `Write one fresh prompt featuring ${pick(nudges, seed)}. Do not reuse common examples.`
-}
-
-// --- Output parsing / validation --------------------------------------------
-
-/**
- * Validate + normalize an LLM drawing response into a strokes JSON string, or
- * null if it isn't usable (→ the DO falls back to a canned doodle). Tolerates
- * stray prose / code fences by extracting the outer JSON array. The engine's
- * `clampDrawing` is the authoritative sanitizer (colors, widths, point bounds),
- * so this only needs to confirm a well-formed, non-empty array of strokes.
- */
-export function parseStrokesJson(raw: string): string | null {
-  if (!raw) return null
-  const start = raw.indexOf('[')
-  const end = raw.lastIndexOf(']')
-  if (start < 0 || end <= start) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1))
-  } catch {
-    return null
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) return null
-  const usable = parsed.some(
-    (st) =>
-      !!st &&
-      typeof st === 'object' &&
-      Array.isArray((st as { points?: unknown }).points) &&
-      ((st as { points: unknown[] }).points.length >= 4),
-  )
-  return usable ? JSON.stringify(parsed) : null
-}
-
-/** Trim an LLM one-liner into a clean prompt/guess, or '' if empty (→ fallback). */
-export function sanitizeBotLine(raw: string): string {
-  return raw
-    .replace(/^["'`\s]+|["'`\s]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_TEXT_LENGTH)
-}
-
-// --- Budget counter math (for the daily-cap DO) -----------------------------
-
-/** A single budget cell: the UTC day it covers + how many generations were used. */
-export interface BudgetCell {
-  day: string
-  used: number
-}
-
-/**
- * Pure counter math for the daily budget DO (extracted so it's unit-testable
- * without a DO runtime). Resets to 0 when the stored cell is from an earlier UTC
- * day; denies when adding `n` would exceed `cap`. On deny the cell is returned
- * rolled to today with its count unchanged, so `used` never overcounts.
- */
-export function tryReserve(
-  cur: BudgetCell | undefined,
-  day: string,
-  n: number,
-  cap: number,
-): { cell: BudgetCell; allowed: boolean } {
-  const used = cur && cur.day === day ? cur.used : 0
-  if (used + n > cap) return { cell: { day, used }, allowed: false }
-  return { cell: { day, used: used + n }, allowed: true }
 }

@@ -1,11 +1,8 @@
 /**
- * Integration billing config. The AI bots call `anthropic/chat-completion` from
- * the game DO to draw + write; those calls are owner-billed (there's no signed-in
- * caller to bill for an anonymous party game). `developer` is also the default
- * for anything unlisted, but we name it explicitly so the billing intent is
- * obvious to the next reader.
+ * Integration billing config. Doodle Chain calls no external APIs — bots draw
+ * from a bundled human-doodle pack (see src/game/doodles.ts), not an LLM — so
+ * there's nothing to bill. Left as an empty map; anything added later defaults
+ * to `developer` (owner-billed) unless flipped to `user`.
  */
 
-export const integrations: Record<string, { billing: 'developer' | 'user' }> = {
-  anthropic: { billing: 'developer' },
-}
+export const integrations: Record<string, { billing: 'developer' | 'user' }> = {}

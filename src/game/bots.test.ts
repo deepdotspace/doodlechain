@@ -1,70 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import {
-  DAILY_BOT_CAP,
-  botTurn,
-  parseStrokesJson,
-  sanitizeBotLine,
-  tryReserve,
-  type BudgetCell,
-} from './bots'
+import { botGuess, botPrompt, botTurn } from './bots'
 import { createInitialState } from './engine'
 import type { Chain, GameState, PlayerState } from './types'
 
-describe('parseStrokesJson (untrusted LLM drawing output)', () => {
-  it('accepts a well-formed strokes array', () => {
-    const raw = '[{"color":"#e8553b","width":6,"points":[0.2,0.2,0.6,0.7]}]'
-    const out = parseStrokesJson(raw)
-    expect(out).not.toBeNull()
-    expect(JSON.parse(out!)).toHaveLength(1)
-  })
-
-  it('extracts the array from prose / markdown fences around it', () => {
-    const raw = 'Sure! Here is the drawing:\n```json\n[{"color":"#000","width":4,"points":[0.1,0.1,0.5,0.5,0.8,0.2]}]\n```\nEnjoy!'
-    const out = parseStrokesJson(raw)
-    expect(out).not.toBeNull()
-    expect(JSON.parse(out!)[0].points).toHaveLength(6)
-  })
-
-  it('rejects non-JSON, empty arrays, and arrays with no usable stroke', () => {
-    expect(parseStrokesJson('')).toBeNull()
-    expect(parseStrokesJson('I cannot draw that.')).toBeNull()
-    expect(parseStrokesJson('[]')).toBeNull()
-    expect(parseStrokesJson('[{"color":"#000","width":4}]')).toBeNull() // no points
-    expect(parseStrokesJson('[{"points":[0.1,0.1]}]')).toBeNull() // < 2 points (needs >= 4 numbers)
-  })
-})
-
-describe('sanitizeBotLine', () => {
-  it('strips surrounding quotes/whitespace and collapses runs', () => {
-    expect(sanitizeBotLine('  "a happy   cloud"  ')).toBe('a happy cloud')
-    expect(sanitizeBotLine('`a robot`')).toBe('a robot')
-  })
-  it('caps at the max text length', () => {
-    const long = 'a '.repeat(80)
-    expect(sanitizeBotLine(long).length).toBeLessThanOrEqual(80)
-  })
-  it('returns empty for empty-ish input (→ caller falls back)', () => {
-    expect(sanitizeBotLine('   ')).toBe('')
-  })
-})
-
-describe('tryReserve (daily budget math)', () => {
-  const DAY = '2026-07-13'
-  it('allows and increments under the cap', () => {
-    const r = tryReserve(undefined, DAY, 1, DAILY_BOT_CAP)
-    expect(r.allowed).toBe(true)
-    expect(r.cell).toEqual({ day: DAY, used: 1 })
-  })
-  it('resets when the stored cell is from an earlier day', () => {
-    const r = tryReserve({ day: '2026-07-12', used: DAILY_BOT_CAP }, DAY, 1, DAILY_BOT_CAP)
-    expect(r.allowed).toBe(true)
-    expect(r.cell.used).toBe(1)
-  })
-  it('denies (unchanged count) the reservation that would exceed the cap', () => {
-    const full: BudgetCell = { day: DAY, used: DAILY_BOT_CAP }
-    const r = tryReserve(full, DAY, 1, DAILY_BOT_CAP)
-    expect(r.allowed).toBe(false)
-    expect(r.cell.used).toBe(DAILY_BOT_CAP)
+describe('canned bot lines', () => {
+  it('prompt + guess are stable, non-empty strings for any seed', () => {
+    for (const seed of [0, 1, 7, 123456, -42]) {
+      expect(botPrompt(seed).length).toBeGreaterThan(0)
+      expect(botGuess(seed).length).toBeGreaterThan(0)
+    }
   })
 })
 
