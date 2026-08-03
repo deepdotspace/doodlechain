@@ -33,7 +33,7 @@ bindings = [
 # database_id = "auto"
 
 [vars]
-DEEPSPACE_APP_ID = "doodlechain"
+DEEPSPACE_APP_ID = "app_01KZ4GVK6Y9VJH1204NQHB3J2W"
 APP_NAME = "doodlechain"
 
 [dev]
