@@ -20,9 +20,15 @@ import { useEffect, useRef } from 'react'
  *    losing the work); the reducer applies buffered inputs before it synthesizes
  *    placeholders, so an in-tick submit still wins.
  *  - Mobile reality: a backgrounded or unloading tab can't run a timer, so we
- *    ALSO flush on `pagehide` (terminal) and on `visibilitychange` when the
- *    deadline is near — that's the "drew, then got a notification" case. Away
- *    early (deadline far off) is left alone so a glance doesn't lock you in.
+ *    ALSO flush on `pagehide` and on `visibilitychange`, both gated to
+ *    `HIDE_FLUSH_MS` before the deadline — that's the "drew, then got a
+ *    notification" case. Away early (deadline far off) is left alone so a glance
+ *    doesn't lock you in. iOS fires `pagehide` on plain backgrounding, not only
+ *    on unload, so it needs the same window check as `visibilitychange`.
+ *  - The clock offset is snapshotted in a ref when a fresh `serverNow` lands.
+ *    Recomputing `serverNow - Date.now()` inside `remaining()` would cancel the
+ *    `Date.now()` terms and pin it to a constant full-phase duration, which
+ *    silently disables the visibility guard and makes `pagehide` fire always.
  *  - `firedForRef` keys the one-shot to `phaseEndsAt`, so a re-render from a
  *    fresh `serverNow` can't double-submit, and it re-arms on the next phase.
  */
@@ -38,14 +44,21 @@ export function useAutoSubmitOnTimeout(
   const submitRef = useRef(submit)
   submitRef.current = submit
   const firedForRef = useRef<number | null>(null)
+  const offsetRef = useRef(0)
+
+  // Snapshot the local<->server clock offset when a fresh serverNow lands, the
+  // same way useCountdown does. It has to be captured ONCE rather than
+  // recomputed per call: `serverNow - Date.now()` re-evaluated later cancels the
+  // Date.now() terms and collapses remaining() to the constant
+  // `phaseEndsAt - serverNow`, i.e. the whole phase duration, forever.
+  useEffect(() => {
+    if (serverNow > 0) offsetRef.current = serverNow - Date.now()
+  }, [serverNow])
 
   useEffect(() => {
     if (phaseEndsAt === null || submitted) return
 
-    const remaining = () => {
-      const offset = serverNow > 0 ? serverNow - Date.now() : 0
-      return phaseEndsAt - offset - Date.now()
-    }
+    const remaining = () => phaseEndsAt - (Date.now() + offsetRef.current)
     const fire = () => {
       if (firedForRef.current === phaseEndsAt) return // one submit per phase deadline
       firedForRef.current = phaseEndsAt
@@ -62,7 +75,13 @@ export function useAutoSubmitOnTimeout(
     const onVisibility = () => {
       if (document.visibilityState === 'hidden' && remaining() <= HIDE_FLUSH_MS) fire()
     }
-    const onPageHide = () => fire()
+    // pagehide is terminal on desktop but ALSO fires on iOS backgrounding, where
+    // the page usually comes back. Gate it on the same near-deadline window as
+    // visibilitychange so app-switching with a minute left doesn't lock the
+    // player out of the rest of the phase.
+    const onPageHide = () => {
+      if (remaining() <= HIDE_FLUSH_MS) fire()
+    }
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('pagehide', onPageHide)
 

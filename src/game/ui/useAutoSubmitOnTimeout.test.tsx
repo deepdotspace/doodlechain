@@ -92,3 +92,55 @@ describe('useAutoSubmitOnTimeout', () => {
     expect(submit).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Mobile fallbacks. These fire long after mount, so they exercise the clock
+// offset being snapshotted rather than recomputed — the failure mode is
+// remaining() collapsing to the whole phase duration, which silently disables
+// the visibility guard and makes pagehide fire unconditionally.
+// ---------------------------------------------------------------------------
+
+describe('mobile fallbacks fire only near the deadline', () => {
+  function mountWith(msLeft: number, submit: () => void) {
+    // Mount at client time 0 with the server agreeing, then let real time pass
+    // so the handlers run well after the effect closed over serverNow.
+    render(<Harness phaseEndsAt={msLeft} serverNow={0} submitted={false} submit={submit} />)
+  }
+
+  function hide() {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+  }
+
+  it('visibilitychange submits when the deadline is close', () => {
+    const submit = vi.fn()
+    mountWith(70_000, submit)
+    act(() => void vi.advanceTimersByTime(60_000)) // 10s left, inside HIDE_FLUSH_MS
+    hide()
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('visibilitychange does NOT submit with most of the phase left', () => {
+    const submit = vi.fn()
+    mountWith(70_000, submit)
+    act(() => void vi.advanceTimersByTime(1_000)) // 69s left
+    hide()
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('pagehide submits when the deadline is close', () => {
+    const submit = vi.fn()
+    mountWith(70_000, submit)
+    act(() => void vi.advanceTimersByTime(60_000))
+    act(() => void window.dispatchEvent(new Event('pagehide')))
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('pagehide does NOT lock the player out with 69s left (iOS backgrounding)', () => {
+    const submit = vi.fn()
+    mountWith(70_000, submit)
+    act(() => void vi.advanceTimersByTime(1_000))
+    act(() => void window.dispatchEvent(new Event('pagehide')))
+    expect(submit).not.toHaveBeenCalled()
+  })
+})
