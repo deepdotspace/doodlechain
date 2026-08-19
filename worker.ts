@@ -27,10 +27,11 @@ import { schemas } from './src/schemas.js'
 import { integrations } from './src/integrations.js'
 import { reduce, createInitialState } from './src/game/engine.js'
 import { STATE_VERSION } from './src/game/types.js'
-import type { EngineInput, GameState, RosterEntry } from './src/game/types.js'
+import type { EngineInput, GameState, PlayerState, RosterEntry } from './src/game/types.js'
 import { MAX_PLAYERS } from './src/game/config.js'
-import { assignedChainOrder } from './src/game/rotation.js'
-import { botPrompt, botGuess, botDrawing } from './src/game/bots.js'
+import { BOT_THINK_MS, botGuess, botPrompt, botTurn, strHash } from './src/game/bots.js'
+import type { BotTurn } from './src/game/bots.js'
+import { botDoodle } from './src/game/doodles.js'
 
 // =============================================================================
 // DO Manifest — declares all Durable Objects for dynamic deploy bindings
@@ -108,9 +109,12 @@ export class AppJobRoom extends JobRoom<Env> {
  * (driven by its own alarm), so timers fire and rounds advance even if every
  * client tab closes. There is no host-tab dependency.
  *
- * It also DRIVES the optional AI bots — offline, zero-cost canned content
- * (`src/game/bots.ts`), staged as ordinary SUBMIT_* inputs a human would send.
- * Bots "think" for a beat before acting so humans always get time in a phase.
+ * It also DRIVES the bots. Bots draw by serving a real human doodle that matches
+ * the prompt (see doodles.ts), and write/guess from canned lists — all pure,
+ * synchronous, and offline. So bot moves are computed right here in onTick and
+ * reduced in the same pass as the humans' inputs: no async, no staging, nothing
+ * to bill. The only guard is "at least one connected human", so a stray room
+ * can't sit playing itself forever.
  */
 export class AppGameRoom extends GameRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
@@ -126,13 +130,14 @@ export class AppGameRoom extends GameRoom<Env> {
       userId: p.userId,
       userName: p.userName,
     }))
-    const cur = this.coerce(state)
     const now = Date.now()
-    const botInputs = computeBotInputs(cur, now)
-    const merged =
-      botInputs.length > 0
-        ? [...(inputs as unknown as EngineInput[]), ...botInputs]
-        : (inputs as unknown as EngineInput[])
+    const cur = this.coerce(state)
+    // Bots move synchronously in the same tick as the humans: their inputs are
+    // computed from the current state and reduced alongside the buffered human
+    // inputs. A bot and a human never own the same chain step, so order is moot.
+    const human = inputs as unknown as EngineInput[]
+    const bots = this.botInputs(cur, now)
+    const merged = bots.length > 0 ? [...bots, ...human] : human
     const next = reduce(cur, merged, now, roster)
     return (next ?? undefined) as Record<string, unknown> | undefined
   }
@@ -148,24 +153,51 @@ export class AppGameRoom extends GameRoom<Env> {
     }
     return createInitialState()
   }
-}
 
-// =============================================================================
-// Bot driver — stage canned bot inputs for the active phase (offline, no AI)
-// =============================================================================
+  // ---------------------------------------------------------------------------
+  // Bot driver — pure, synchronous, offline
+  // ---------------------------------------------------------------------------
 
-const BOT_THINK_MS = 2600
+  /**
+   * The bot moves due this tick, as ordinary engine inputs. A bot acts only
+   * after a short "thinking" beat (so humans see the phase first, staggered so
+   * bots don't all fire at once) and only if at least one human is connected.
+   * `botTurn` returns null once a bot has submitted, so it's never added twice.
+   */
+  private botInputs(cur: GameState, now: number): EngineInput[] {
+    if (cur.phase !== 'PROMPT' && cur.phase !== 'DRAW' && cur.phase !== 'GUESS') return []
+    if (cur.phaseEndsAt === null) return []
+    const bots = Object.values(cur.players).filter((p) => p.isBot)
+    if (bots.length === 0) return []
+    // Never let a room play itself with no human present.
+    if (!Object.values(cur.players).some((p) => !p.isBot && p.connected)) return []
 
-function strHash(s: string): number {
-  let h = 2166136261
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 16777619)
+    const phaseStart = cur.phaseEndsAt - phaseDurationMs(cur)
+    const out: EngineInput[] = []
+    for (const bot of bots) {
+      const turn = botTurn(cur, bot)
+      if (!turn) continue
+      if (now < phaseStart + BOT_THINK_MS + (strHash(bot.userId) % 2000)) continue
+      out.push(this.botInput(bot, turn))
+    }
+    return out
   }
-  return Math.abs(h | 0)
+
+  /** One bot's move: a real doodle matching the prompt to draw, else a canned line. */
+  private botInput(bot: PlayerState, turn: BotTurn): EngineInput {
+    const seed = strHash(`${bot.userId}:${turn.round}`)
+    switch (turn.phase) {
+      case 'DRAW':
+        return { userId: bot.userId, action: 'SUBMIT_DRAWING', data: { strokes: botDoodle(turn.source, seed) } }
+      case 'GUESS':
+        return { userId: bot.userId, action: 'SUBMIT_GUESS', data: { text: botGuess(strHash(`${bot.userId}:g:${turn.round}`)) } }
+      default:
+        return { userId: bot.userId, action: 'SUBMIT_PROMPT', data: { text: botPrompt(seed) } }
+    }
+  }
 }
 
-function activePhaseDurationMs(s: GameState): number {
+function phaseDurationMs(s: GameState): number {
   switch (s.phase) {
     case 'PROMPT':
       return s.config.promptSeconds * 1000
@@ -176,33 +208,6 @@ function activePhaseDurationMs(s: GameState): number {
     default:
       return 0
   }
-}
-
-/** One SUBMIT_* input per bot that owes a step this round and has "thought" long enough. */
-function computeBotInputs(s: GameState, now: number): EngineInput[] {
-  if (s.phase !== 'PROMPT' && s.phase !== 'DRAW' && s.phase !== 'GUESS') return []
-  if (s.phaseEndsAt === null) return []
-  const phaseStart = s.phaseEndsAt - activePhaseDurationMs(s)
-  const out: EngineInput[] = []
-  for (const bot of Object.values(s.players)) {
-    if (!bot.isBot) continue
-    const jitter = strHash(bot.userId) % 2200
-    if (now < phaseStart + BOT_THINK_MS + jitter) continue
-    const seat = s.chains.findIndex((c) => c.ownerCid === bot.cid)
-    if (seat < 0) continue
-    const round = s.round
-    const chainOrder = s.phase === 'PROMPT' ? seat : assignedChainOrder(seat, round, s.seatCount)
-    if (s.chains[chainOrder]?.steps[round]) continue // already submitted
-    const seed = strHash(`${bot.userId}:${round}`)
-    if (s.phase === 'PROMPT') {
-      out.push({ userId: bot.userId, action: 'SUBMIT_PROMPT', data: { text: botPrompt(seed) } })
-    } else if (s.phase === 'DRAW') {
-      out.push({ userId: bot.userId, action: 'SUBMIT_DRAWING', data: { strokes: botDrawing(seed) } })
-    } else {
-      out.push({ userId: bot.userId, action: 'SUBMIT_GUESS', data: { text: botGuess(seed) } })
-    }
-  }
-  return out
 }
 
 // =============================================================================

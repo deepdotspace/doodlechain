@@ -44,6 +44,7 @@ import {
   nextColor,
 } from './config'
 import { assignedChainOrder, holderSeatForChain, isDrawingRound } from './rotation'
+import { botName } from './bots'
 
 export function createInitialState(): GameState {
   return {
@@ -91,15 +92,18 @@ function seatOfCid(state: GameState, cid: string): number {
 }
 
 /** Add an AI bot to the lobby — no WS connection; the DO drives its inputs. */
-function makeBot(s: GameState, name: string, now: number): void {
+function makeBot(s: GameState, name: string | undefined, now: number): void {
   let n = 1
   while (s.players[`bot-${n}`]) n++
   const id = `bot-${n}`
   const used = Object.values(s.players).map((p) => p.color)
+  // Distinct, characterful default names (Pixel, Doodlebot, …) keyed to the
+  // bot's slot, so bots added one-at-a-time don't all end up "Bot 1".
+  const display = name && name.trim() ? sanitizeName(name) : botName(n - 1)
   s.players[id] = {
     userId: id,
     cid: id,
-    name: sanitizeName(name),
+    name: display,
     color: nextColor(used),
     isHost: false,
     connected: true,
@@ -202,7 +206,7 @@ export function reduce(
           const names = Array.isArray(input.data.names) ? (input.data.names as unknown[]) : []
           for (let i = 0; i < count; i++) {
             if (roster(s).length >= MAX_PLAYERS) break
-            const nm = typeof names[i] === 'string' ? (names[i] as string) : `Bot ${i + 1}`
+            const nm = typeof names[i] === 'string' ? (names[i] as string) : undefined
             makeBot(s, nm, now)
             touch()
           }
