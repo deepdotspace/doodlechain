@@ -1,5 +1,18 @@
 # Credits
 
+## Bot doodles
+
+The doodles the bots draw (`src/game/doodles.data.json`) are real human sketches
+from the **Google "Quick, Draw!" Dataset**, made available by Google, Inc. under
+the **Creative Commons Attribution 4.0 International** license (CC BY 4.0). They
+were downscaled to this app's normalized stroke format by `scripts/build-doodles.mjs`.
+
+> "The Quick, Draw! Dataset" by Google, Inc., licensed under CC BY 4.0.
+> https://github.com/googlecreativelab/quickdraw-dataset
+> License: https://creativecommons.org/licenses/by/4.0/
+
+---
+
 ## Background music
 
 All background music in `public/audio/` is by **Kevin MacLeod** (incompetech.com)

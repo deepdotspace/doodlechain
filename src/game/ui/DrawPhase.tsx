@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import type { UseDoodleChain } from '../useDoodleChain'
 import { DrawingCanvas, BRUSH_WIDTHS, PALETTE, type DrawingCanvasHandle } from '../DrawingCanvas'
 import { PhaseHeader, PhaseShell, WaitingForOthers } from './PhaseFrame'
+import { useAutoSubmitOnTimeout } from './useAutoSubmitOnTimeout'
 
 export function DrawPhase({ game }: { game: UseDoodleChain }) {
   const { sourceStep, submitted, submitDrawing, submittedCount, totalSeats, seat } = game
@@ -9,6 +10,13 @@ export function DrawPhase({ game }: { game: UseDoodleChain }) {
   const [color, setColor] = useState<string>(PALETTE[0])
   const [width, setWidth] = useState<number>(BRUSH_WIDTHS[1])
   const [count, setCount] = useState(0)
+
+  // Running out of time keeps whatever's on the canvas — auto-submit before the
+  // deadline. An untouched canvas is left to skip (nothing worth saving).
+  useAutoSubmitOnTimeout(game.state.phaseEndsAt, game.state.serverNow, submitted, () => {
+    const canvas = canvasRef.current
+    if (canvas && !canvas.isEmpty()) submitDrawing(canvas.getStrokesJson())
+  })
 
   const header = (
     <PhaseHeader

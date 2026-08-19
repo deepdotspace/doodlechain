@@ -189,6 +189,70 @@ describe('server-authoritative timers (no client needed to advance)', () => {
   })
 })
 
+describe('last-second submit (auto-save on timeout)', () => {
+  it('preserves a drawing submitted on the very tick the phase times out', () => {
+    const N = 3
+    let { state: s, conns } = startedGame(N)
+    // Everyone writes a prompt → round-1 DRAW.
+    s = step(
+      s,
+      conns,
+      conns.map((c) => ({ userId: c.userId, action: 'SUBMIT_PROMPT', data: { text: c.name } })),
+      2000,
+    )
+    expect(s.phase).toBe('DRAW')
+
+    // u0 auto-submits its in-progress drawing in the SAME tick the timer expires
+    // (now === phaseEndsAt). The reducer applies inputs before synthesizing, so
+    // the real drawing must win over a skipped placeholder.
+    const deadline = s.phaseEndsAt!
+    s = step(
+      s,
+      conns,
+      [{ userId: 'u0', action: 'SUBMIT_DRAWING', data: { strokes: '[{"color":"#1c1a17","width":6,"points":[0.1,0.1,0.4,0.4]}]' } }],
+      deadline,
+    )
+
+    // Phase advanced on the timeout, but u0's chain (seat 0 draws chain 0 in
+    // round 1) kept the real drawing, NOT a skipped one.
+    expect(s.phase).toBe('GUESS')
+    const kept = s.chains[0].steps[1]
+    expect(kept).toBeDefined()
+    expect(kept.skipped).toBeUndefined()
+    expect(JSON.parse(kept.content)).toHaveLength(1)
+    // The seats that never submitted are the ones that got the skipped placeholder.
+    expect(s.chains.some((c) => c.steps[1]?.skipped)).toBe(true)
+  })
+
+  it('rejects a drawing that arrives a tick too late (after the phase advanced)', () => {
+    const N = 3
+    let { state: s, conns } = startedGame(N)
+    s = step(
+      s,
+      conns,
+      conns.map((c) => ({ userId: c.userId, action: 'SUBMIT_PROMPT', data: { text: c.name } })),
+      2000,
+    )
+    expect(s.phase).toBe('DRAW')
+
+    // Nobody draws → the timer fires, chains are synthesized as skipped, and the
+    // round advances to GUESS.
+    s = step(s, conns, [], s.phaseEndsAt! + 1)
+    expect(s.phase).toBe('GUESS')
+    expect(s.chains[0].steps[1].skipped).toBe(true)
+
+    // A drawing that lands one tick late (phase already GUESS) is ignored by the
+    // phase guard — the skipped placeholder stands, no corruption.
+    s = step(
+      s,
+      conns,
+      [{ userId: 'u0', action: 'SUBMIT_DRAWING', data: { strokes: '[{"color":"#000","width":6,"points":[0.1,0.1,0.5,0.5]}]' } }],
+      s.phaseEndsAt! - 10,
+    )
+    expect(s.chains[0].steps[1].skipped).toBe(true)
+  })
+})
+
 describe('drawing payload clamp (untrusted client input)', () => {
   it('caps stroke count and points-per-stroke, dropping the rest', () => {
     const N = 3

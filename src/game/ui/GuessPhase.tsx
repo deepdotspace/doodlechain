@@ -3,10 +3,17 @@ import type { UseDoodleChain } from '../useDoodleChain'
 import { MAX_TEXT_LENGTH } from '../config'
 import { StrokeRenderer } from '../StrokeRenderer'
 import { PhaseBody, PhaseHeader, PhaseShell, WaitingForOthers } from './PhaseFrame'
+import { useAutoSubmitOnTimeout } from './useAutoSubmitOnTimeout'
 
 export function GuessPhase({ game }: { game: UseDoodleChain }) {
   const { sourceStep, submitted, submitGuess, submittedCount, totalSeats, seat } = game
   const [text, setText] = useState('')
+
+  // Running out of time keeps whatever's typed — auto-submit before the deadline.
+  useAutoSubmitOnTimeout(game.state.phaseEndsAt, game.state.serverNow, submitted, () => {
+    const t = text.trim()
+    if (t.length > 0) submitGuess(t)
+  })
 
   const header = (
     <PhaseHeader

@@ -3,6 +3,7 @@ import type { UseDoodleChain } from '../useDoodleChain'
 import { MAX_TEXT_LENGTH } from '../config'
 import { Mascot } from './bits'
 import { PhaseBody, PhaseHeader, PhaseShell, WaitingForOthers } from './PhaseFrame'
+import { useAutoSubmitOnTimeout } from './useAutoSubmitOnTimeout'
 
 const STARTERS = [
   'a cat riding a skateboard',
@@ -15,6 +16,12 @@ const STARTERS = [
 export function PromptPhase({ game }: { game: UseDoodleChain }) {
   const { submitted, submitPrompt, submittedCount, totalSeats, seat } = game
   const [text, setText] = useState('')
+
+  // Running out of time keeps whatever's typed — auto-submit before the deadline.
+  useAutoSubmitOnTimeout(game.state.phaseEndsAt, game.state.serverNow, submitted, () => {
+    const t = text.trim()
+    if (t.length > 0) submitPrompt(t)
+  })
 
   // A player who connects after the game has started has no seat this round.
   if (seat < 0) {
