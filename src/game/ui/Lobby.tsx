@@ -95,17 +95,31 @@ export function Lobby({ game, code }: { game: UseDoodleChain; code: string }) {
               suffix="s"
             />
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="font-display font-extrabold">Add a bot</span>
-            <button
-              data-testid="add-bot"
-              onClick={() => addBots(1)}
-              disabled={players.length >= MAX_PLAYERS}
-              className="btn-sticker bg-secondary px-4 py-1.5 font-display text-sm text-secondary-foreground disabled:opacity-50"
-              style={{ background: 'var(--game-accent)' }}
-            >
-              + Bot {bots.length > 0 ? `(${bots.length})` : ''}
-            </button>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="font-display font-extrabold">Add a bot</span>
+                <span
+                  data-testid="bot-experimental"
+                  className="rounded-full border-2 border-[var(--game-ink)] bg-white px-2 py-0.5 font-body text-[10px] font-bold uppercase tracking-widest"
+                  style={{ color: 'var(--game-primary)' }}
+                >
+                  Experimental
+                </span>
+              </span>
+              <button
+                data-testid="add-bot"
+                onClick={() => addBots(1)}
+                disabled={players.length >= MAX_PLAYERS}
+                className="btn-sticker bg-secondary px-4 py-1.5 font-display text-sm text-secondary-foreground disabled:opacity-50"
+                style={{ background: 'var(--game-accent)' }}
+              >
+                + Bot {bots.length > 0 ? `(${bots.length})` : ''}
+              </button>
+            </div>
+            <p className="font-hand text-base leading-tight text-muted-foreground">
+              Bots draw real doodles, but their guesses are canned lines, not real reads of your drawing.
+            </p>
           </div>
           <button
             data-testid="start-game"

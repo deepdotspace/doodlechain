@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { botGuess, botPrompt, botTurn } from './bots'
+import { assignedChainOrder } from './rotation'
 import { createInitialState } from './engine'
 import type { Chain, GameState, PlayerState } from './types'
 
@@ -31,16 +32,36 @@ describe('botTurn', () => {
     return { s, bot }
   }
 
-  it('reports the drawing turn + the source to draw for a seated bot', () => {
+  it('draws the OTHER seat\'s prompt, never the one it wrote itself', () => {
     const { s, bot } = drawStateWithBot()
     const turn = botTurn(s, bot)
-    expect(turn).toEqual({ phase: 'DRAW', round: 1, source: 'a shy volcano' })
+    // The bot owns chain 0 ('a shy volcano'). In round 1 of a 2-seat game the
+    // stack passes forward, so it must be handed Ada's chain instead.
+    expect(turn).toEqual({ phase: 'DRAW', round: 1, source: 'a sleepy sun' })
+    expect(assignedChainOrder(0, 1, 2)).toBe(1)
   })
 
   it('returns null once the bot has already submitted this round', () => {
     const { s, bot } = drawStateWithBot()
-    s.chains[0].steps[1] = { round: 1, type: 'drawing', authorCid: 'bot-1', authorName: 'Pixel', content: '[]' }
+    // The bot's assigned chain in round 1 is chain 1, not its own chain 0.
+    s.chains[1].steps[1] = { round: 1, type: 'drawing', authorCid: 'bot-1', authorName: 'Pixel', content: '[]' }
     expect(botTurn(s, bot)).toBeNull()
+  })
+
+  it('is NOT considered done just because its own chain already has the round', () => {
+    const { s, bot } = drawStateWithBot()
+    // Ada drew the bot's chain this round. That must not satisfy the bot's turn.
+    s.chains[0].steps[1] = { round: 1, type: 'drawing', authorCid: 'cidH', authorName: 'Ada', content: '[]' }
+    expect(botTurn(s, bot)).toEqual({ phase: 'DRAW', round: 1, source: 'a sleepy sun' })
+  })
+
+  it('writes its own chain in PROMPT (round 0 is the one round you own)', () => {
+    const { s, bot } = drawStateWithBot()
+    s.phase = 'PROMPT'
+    s.round = 0
+    s.chains[0].steps = {}
+    s.chains[1].steps = {}
+    expect(botTurn(s, bot)).toEqual({ phase: 'PROMPT', round: 0, source: '' })
   })
 
   it('returns null when not seated / not in an active phase', () => {

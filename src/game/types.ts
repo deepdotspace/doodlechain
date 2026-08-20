@@ -6,8 +6,9 @@
  * The mechanic (a "drawing telephone"): every player starts a chain with a
  * written prompt, then each round the stacks pass one seat forward — you DRAW
  * the text you received, the next player GUESSES your drawing, the next DRAWS
- * that guess, and so on. After N rounds (N = player count) a shared slideshow
- * reveals how each chain mutated.
+ * that guess, and so on. You never get your own chain back: with N players it
+ * runs for N-1 rounds, so every OTHER seat touches your chain exactly once.
+ * Then a shared slideshow reveals how each chain mutated.
  */
 
 /** Bump when the GameState shape changes (drives onHydrateState in the DO). */
@@ -92,11 +93,12 @@ export interface GameState {
   /** Every player seen this game, keyed by server userId (includes the host). */
   players: Record<string, PlayerState>
   /**
-   * Number of seated players, frozen at game start = totalRounds. Chains and
-   * rotation use this, NOT the live roster size (which can change on a drop).
+   * Number of seated players, frozen at game start; play runs for seatCount-1
+   * rounds (`totalRounds`). Chains and rotation use this, NOT the live roster
+   * size (which can change on a drop).
    */
   seatCount: number
-  /** 0-based round. PROMPT=0, then DRAW/GUESS alternate up to seatCount-1. */
+  /** 0-based round. PROMPT=0, then DRAW/GUESS alternate over 1..seatCount-1. */
   round: number
   /** One chain per seat, index === order. Empty in LOBBY. */
   chains: Chain[]

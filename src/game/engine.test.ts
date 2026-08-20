@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createInitialState, reduce, roster } from './engine'
-import type { EngineInput, GameState, RosterEntry } from './types'
-import { assignedChainOrder } from './rotation'
+import type { Chain, EngineInput, GameState, RosterEntry } from './types'
+import { assignedChainOrder, totalRounds } from './rotation'
 
 // --- Test helpers ----------------------------------------------------------
 
@@ -107,8 +107,8 @@ describe('full game flow', () => {
     )
     expect(s.phase).toBe('DRAW')
 
-    // Rounds 1..N: each connected player submits on their assigned chain.
-    for (let round = 1; round <= N; round++) {
+    // Rounds 1..N-1: each connected player submits on their assigned chain.
+    for (let round = 1; round <= totalRounds(N); round++) {
       now += 1000
       const action = s.phase === 'DRAW' ? 'SUBMIT_DRAWING' : 'SUBMIT_GUESS'
       const inputs = conns.map((c, i) => {
@@ -121,10 +121,16 @@ describe('full game flow', () => {
     }
 
     expect(s.phase).toBe('REVEAL')
-    // Every chain has a full set of steps 0..N.
+    // Every chain has a full set of steps 0..N-1 — the prompt plus one
+    // contribution from each of the OTHER N-1 seats. Nothing from its owner.
     for (const chain of s.chains) {
-      for (let r = 0; r <= N; r++) expect(chain.steps[r]).toBeDefined()
+      for (let r = 0; r <= totalRounds(N); r++) expect(chain.steps[r]).toBeDefined()
+      expect(chain.steps[totalRounds(N) + 1]).toBeUndefined()
       expect(chain.steps[0].skipped).toBeUndefined()
+      expect(chain.steps[0].authorCid).toBe(chain.ownerCid)
+      for (let r = 1; r <= totalRounds(N); r++) {
+        expect(chain.steps[r].authorCid).not.toBe(chain.ownerCid)
+      }
     }
 
     // Host clicks through the whole slideshow → DONE.
@@ -213,10 +219,12 @@ describe('last-second submit (auto-save on timeout)', () => {
       deadline,
     )
 
-    // Phase advanced on the timeout, but u0's chain (seat 0 draws chain 0 in
-    // round 1) kept the real drawing, NOT a skipped one.
+    // Phase advanced on the timeout, but the chain u0 was assigned (seat 0 draws
+    // chain (0 - 1) mod 3 = 2 in round 1) kept the real drawing, NOT a skipped
+    // one. Note it is NOT chain 0 — u0 never touches its own chain.
     expect(s.phase).toBe('GUESS')
-    const kept = s.chains[0].steps[1]
+    expect(assignedChainOrder(0, 1, N)).toBe(2)
+    const kept = s.chains[2].steps[1]
     expect(kept).toBeDefined()
     expect(kept.skipped).toBeUndefined()
     expect(JSON.parse(kept.content)).toHaveLength(1)
@@ -265,13 +273,13 @@ describe('drawing payload clamp (untrusted client input)', () => {
     )
     expect(s.phase).toBe('DRAW')
 
-    // u0 (seat 0) draws chain 0 in round 1. Submit a hostile oversized payload
+    // u0 (seat 0) draws chain 2 in round 1. Submit a hostile oversized payload
     // (well past both caps: 700 > MAX_STROKES 600, 900 > 2*MAX_POINTS 800).
     const hugeStroke = { color: '#000000', width: 8, points: Array(900).fill(0.5) }
     const hugePayload = JSON.stringify(Array(700).fill(hugeStroke))
     s = step(s, conns, [{ userId: 'u0', action: 'SUBMIT_DRAWING', data: { strokes: hugePayload } }], 3000)
 
-    const stored = JSON.parse(s.chains[0].steps[1].content)
+    const stored = JSON.parse(s.chains[assignedChainOrder(0, 1, N)].steps[1].content)
     expect(Array.isArray(stored)).toBe(true)
     expect(stored.length).toBeLessThanOrEqual(600) // MAX_STROKES
     for (const st of stored) {
@@ -290,7 +298,10 @@ describe('drawing payload clamp (untrusted client input)', () => {
       2000,
     )
     s = step(s, conns, [{ userId: 'u0', action: 'SUBMIT_DRAWING', data: { strokes: 'not json{{' } }], 3000)
-    expect(s.chains[0].steps[1].content).toBe('[]')
+    // N=2: seat 0 draws the OTHER player's chain (chain 1), never its own.
+    expect(assignedChainOrder(0, 1, N)).toBe(1)
+    expect(s.chains[1].steps[1].content).toBe('[]')
+    expect(s.chains[0].steps[1]).toBeUndefined()
   })
 })
 
@@ -323,5 +334,195 @@ describe('rejoin', () => {
       2600,
     )
     expect(s.chains[chainOrder].steps[s.round]?.authorCid).toBe('cid1')
+  })
+})
+
+describe('chain rotation through a whole game (nobody ever gets their own chain)', () => {
+  /**
+   * The regression this file exists to pin: the owner reported "I write a prompt
+   * and then I get the same prompt to draw." Play a full N-player game where
+   * every submission is tagged with its author, then assert that no chain ever
+   * carries a post-prompt step written by its own owner.
+   */
+  function playFullGame(N: number): GameState {
+    let { state: s, conns } = startedGame(N)
+    let now = 2000
+    s = step(
+      s,
+      conns,
+      conns.map((c) => ({ userId: c.userId, action: 'SUBMIT_PROMPT', data: { text: `${c.name}-seed` } })),
+      now,
+    )
+    for (let round = 1; round <= totalRounds(N); round++) {
+      now += 1000
+      const action = s.phase === 'DRAW' ? 'SUBMIT_DRAWING' : 'SUBMIT_GUESS'
+      const inputs = conns.map((c) =>
+        action === 'SUBMIT_DRAWING'
+          ? { userId: c.userId, action, data: { strokes: '[]' } }
+          : { userId: c.userId, action, data: { text: `${c.name}-guess-r${round}` } },
+      )
+      s = step(s, conns, inputs, now)
+    }
+    return s
+  }
+
+  for (const N of [2, 3, 4, 5, 8]) {
+    it(`${N}-player game: every chain is seeded by its owner and then only touched by others`, () => {
+      const s = playFullGame(N)
+      expect(s.phase).toBe('REVEAL')
+      expect(s.chains).toHaveLength(N)
+
+      for (const chain of s.chains) {
+        // Seed prompt: the owner's own words.
+        expect(chain.steps[0].type).toBe('prompt')
+        expect(chain.steps[0].authorCid).toBe(chain.ownerCid)
+        // Every later step belongs to a DIFFERENT seat, and each of the other
+        // N-1 seats contributes exactly once.
+        const authors = new Set<string>()
+        for (let r = 1; r <= totalRounds(N); r++) {
+          const stepAtR = chain.steps[r]
+          expect(stepAtR, `chain ${chain.order} is missing round ${r}`).toBeDefined()
+          expect(
+            stepAtR.authorCid,
+            `chain ${chain.order} was handed back to its owner in round ${r}`,
+          ).not.toBe(chain.ownerCid)
+          expect(authors.has(stepAtR.authorCid)).toBe(false)
+          authors.add(stepAtR.authorCid)
+        }
+        expect(authors.size).toBe(N - 1)
+        // A chain ends up exactly N steps long: prompt + one per other seat.
+        expect(Object.keys(chain.steps)).toHaveLength(N)
+      }
+    })
+  }
+
+  it('4-player game alternates DRAW, GUESS, DRAW and stops (no 4th round)', () => {
+    const N = 4
+    let { state: s, conns } = startedGame(N)
+    let now = 2000
+    s = step(
+      s,
+      conns,
+      conns.map((c) => ({ userId: c.userId, action: 'SUBMIT_PROMPT', data: { text: c.name } })),
+      now,
+    )
+    const seen: Array<{ round: number; phase: string }> = []
+    for (let round = 1; round <= totalRounds(N); round++) {
+      seen.push({ round: s.round, phase: s.phase })
+      now += 1000
+      const action = s.phase === 'DRAW' ? 'SUBMIT_DRAWING' : 'SUBMIT_GUESS'
+      const inputs = conns.map((c) =>
+        action === 'SUBMIT_DRAWING'
+          ? { userId: c.userId, action, data: { strokes: '[]' } }
+          : { userId: c.userId, action, data: { text: `${c.name}-g` } },
+      )
+      s = step(s, conns, inputs, now)
+    }
+    expect(seen).toEqual([
+      { round: 1, phase: 'DRAW' },
+      { round: 2, phase: 'GUESS' },
+      { round: 3, phase: 'DRAW' },
+    ])
+    expect(s.phase).toBe('REVEAL')
+  })
+})
+
+describe('edge case: two seats', () => {
+  it('plays exactly one DRAW round, never reaches GUESS, and reveals a 2-step chain', () => {
+    const N = 2
+    let { state: s, conns } = startedGame(N)
+    expect(totalRounds(N)).toBe(1)
+
+    s = step(
+      s,
+      conns,
+      conns.map((c) => ({ userId: c.userId, action: 'SUBMIT_PROMPT', data: { text: `${c.name}-seed` } })),
+      2000,
+    )
+    expect(s.phase).toBe('DRAW')
+    expect(s.round).toBe(1)
+
+    // Each player draws the OTHER player's prompt.
+    s = step(
+      s,
+      conns,
+      conns.map((c) => ({ userId: c.userId, action: 'SUBMIT_DRAWING', data: { strokes: '[]' } })),
+      3000,
+    )
+
+    // One round only — straight to the slideshow, no GUESS phase.
+    expect(s.phase).toBe('REVEAL')
+    for (const chain of s.chains) {
+      expect(Object.keys(chain.steps)).toHaveLength(2)
+      expect(chain.steps[0].type).toBe('prompt')
+      expect(chain.steps[1].type).toBe('drawing')
+      expect(chain.steps[1].authorCid).not.toBe(chain.ownerCid)
+      expect(chain.steps[2]).toBeUndefined()
+    }
+    // Player0 seeded chain 0 and drew chain 1; Player1 did the mirror image.
+    expect(s.chains[0].steps[1].authorCid).toBe('cid1')
+    expect(s.chains[1].steps[1].authorCid).toBe('cid0')
+
+    // The slideshow walks 2 chains x 2 steps and then finishes.
+    let now = 4000
+    let guard = 0
+    while (s.phase === 'REVEAL' && guard++ < 50) {
+      now += 100
+      s = step(s, conns, [{ userId: 'u0', action: 'REVEAL_NEXT', data: {} }], now)
+    }
+    expect(s.phase).toBe('DONE')
+    expect(guard).toBe(4) // (2 chains x 2 steps) transitions, last one lands on DONE
+  })
+})
+
+describe('edge case: a single seat', () => {
+  /**
+   * MIN_PLAYERS keeps a 1-player game out of the lobby, so this is defensive:
+   * with nobody to pass to there are zero rounds, and the right behaviour is to
+   * seed the chain and go straight to the recap — never to hand the prompt back.
+   */
+  function soloPromptState(): GameState {
+    const s = createInitialState()
+    s.phase = 'PROMPT'
+    s.hostCid = 'solo'
+    s.seatCount = 1
+    s.round = 0
+    s.chains = [{ order: 0, ownerCid: 'solo', ownerName: 'Solo', steps: {} }] as Chain[]
+    s.players = {
+      u0: {
+        userId: 'u0', cid: 'solo', name: 'Solo', color: '#e8553b',
+        isHost: true, connected: true, joinedAt: 1,
+      },
+    }
+    s.phaseEndsAt = 5000
+    return s
+  }
+
+  it('skips straight from PROMPT to the recap instead of replaying the prompt', () => {
+    const conns: Conn[] = [{ userId: 'u0', cid: 'solo', name: 'Solo' }]
+    let s = soloPromptState()
+    expect(totalRounds(s.seatCount)).toBe(0)
+
+    s = step(s, conns, [{ userId: 'u0', action: 'SUBMIT_PROMPT', data: { text: 'a lonely cactus' } }], 4000)
+
+    expect(s.phase).toBe('REVEAL')
+    expect(s.round).toBe(0)
+    expect(s.chains[0].steps[0].content).toBe('a lonely cactus')
+    expect(s.chains[0].steps[1]).toBeUndefined() // no round handed back to the author
+  })
+
+  it('reaches DONE from the recap without looping or crashing', () => {
+    const conns: Conn[] = [{ userId: 'u0', cid: 'solo', name: 'Solo' }]
+    let s = soloPromptState()
+    s = step(s, conns, [], 6000) // timeout with no prompt: a seed is synthesized
+    expect(s.phase).toBe('REVEAL')
+
+    let now = 7000
+    let guard = 0
+    while (s.phase === 'REVEAL' && guard++ < 20) {
+      now += 100
+      s = step(s, conns, [{ userId: 'u0', action: 'REVEAL_NEXT', data: {} }], now)
+    }
+    expect(s.phase).toBe('DONE')
   })
 })

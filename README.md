@@ -21,7 +21,7 @@ Real-time sync, the database, and hosting all come from DeepSpace, so there's no
 
 1. One person creates a room and shares the four-letter code.
 2. Everyone picks a nickname and joins. No sign-up.
-3. Each player writes a short starting prompt. Then the "books" pass around the table: you draw the prompt you were handed, the next player guesses your drawing in words, the next draws that guess, and so on until every book has visited everyone.
+3. Each player writes a short starting prompt. Then the "books" pass around the table: you draw the prompt you were handed, the next player guesses your drawing in words, the next draws that guess, and so on until every book has visited every player except its owner. You never get your own book back.
 4. The reveal plays each chain back as a slideshow, so the whole room can see how "a cowboy octopus on a skateboard" turned into something unrecognizable.
 
 Best with 2 to 10 players on laptops with a voice call running in another window. A round takes about five minutes.

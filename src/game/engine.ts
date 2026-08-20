@@ -43,7 +43,7 @@ import {
   MIN_PLAYERS,
   nextColor,
 } from './config'
-import { assignedChainOrder, holderSeatForChain, isDrawingRound } from './rotation'
+import { assignedChainOrder, holderSeatForChain, isDrawingRound, totalRounds } from './rotation'
 import { botName } from './bots'
 
 export function createInitialState(): GameState {
@@ -357,8 +357,14 @@ function advance(s: GameState, now: number): boolean {
     case 'PROMPT': {
       if (timedOut || everyoneSubmitted(s)) {
         synthesizeMissing(s)
-        s.round = 1
-        enterPhase(s, 'DRAW', now)
+        // A solo seat has nobody to pass to (totalRounds === 0), so the seeded
+        // chain goes straight to the recap rather than handing the prompt back.
+        if (totalRounds(s.seatCount) < 1) {
+          enterReveal(s, now)
+        } else {
+          s.round = 1
+          enterPhase(s, 'DRAW', now)
+        }
         return true
       }
       return false
@@ -367,7 +373,7 @@ function advance(s: GameState, now: number): boolean {
     case 'GUESS': {
       if (timedOut || everyoneSubmitted(s)) {
         synthesizeMissing(s)
-        if (s.round >= s.seatCount) {
+        if (s.round >= totalRounds(s.seatCount)) {
           enterReveal(s, now)
         } else {
           s.round += 1
@@ -443,9 +449,13 @@ function enterReveal(s: GameState, now: number): void {
   s.phaseEndsAt = now + s.config.revealStepMs
 }
 
-/** Total steps in a chain = prompt (0) + rounds 1..seatCount. */
+/**
+ * Total steps in a chain = prompt (0) + rounds 1..totalRounds, i.e. one per
+ * seat: the owner's prompt plus a contribution from each of the other seats.
+ * Floored at 1 so a degenerate single-seat game still reveals its one prompt.
+ */
 function stepsInChain(s: GameState): number {
-  return s.seatCount + 1
+  return Math.max(1, s.seatCount)
 }
 
 function advanceReveal(s: GameState, now: number): void {
