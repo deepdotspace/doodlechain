@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react'
-import { useGameRoom } from 'deepspace'
+import { useGameRoom } from '../vendor/deepspace-game/useGameRoom'
 import { createInitialState } from './engine'
 import { assignedChainOrder } from './rotation'
 import { STATE_VERSION } from './types'
