@@ -2,7 +2,8 @@
 /**
  * Regression tests for the connect → write-access handoff in useDoodleChain.
  *
- * The SDK's useGameRoom exposes two distinct signals with a real ordering gap:
+ * The vendored useGameRoom (src/vendor/deepspace-game) exposes two distinct
+ * signals with a real ordering gap:
  *   - `connected`  flips true on the WebSocket `onopen`.
  *   - `canWrite`   flips true only once the server's `AUTH` message arrives.
  * Every send (`sendInput`, `startGame`) is silently DROPPED while `canWrite` is
@@ -11,9 +12,13 @@
  * already sent. That produced the "joiner is stuck on 'You joined mid-game' and
  * never gets a turn" bug.
  *
- * The mock below models that SDK contract faithfully: `send` is a no-op until
+ * The mock below models that contract faithfully: `send` is a no-op until
  * `canWrite`, and the send callbacks change identity only when `canWrite` flips
- * (mirroring useCallback([send]) / send = useCallback([canWrite]) in the SDK).
+ * (mirroring useCallback([send]) / send = useCallback([canWrite]) in the hook).
+ *
+ * The mock must target the vendored module path, not 'deepspace' — the hook was
+ * removed from the SDK in v0.17.0, so a mock of 'deepspace' would leave the real
+ * hook in play and open a WebSocket in jsdom.
  */
 import * as React from 'react'
 import { render, act, cleanup } from '@testing-library/react'
@@ -29,7 +34,7 @@ const h = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('deepspace', () => ({
+vi.mock('../vendor/deepspace-game/useGameRoom', () => ({
   useGameRoom: () => {
     const { connected, canWrite, state, players } = h.controller
     // Identity changes only when canWrite flips — exactly like the SDK, where

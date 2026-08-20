@@ -1,12 +1,14 @@
 name = "doodlechain"
-compatibility_date = "2025-01-01"
-compatibility_flags = ["nodejs_compat"]
+# Matches the installed workerd build (1.20260617.1). Honored from this file
+# since SDK 0.15.0, so it must name a date the runtime actually ships.
+compatibility_date = "2026-06-17"
+compatibility_flags = ["nodejs_compat", "assets_navigation_has_no_effect"]
 main = "worker.ts"
 
 [assets]
 directory = "dist"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
+not_found_handling = "none"
 run_worker_first = ["/api/*", "/ws/*", "/internal/*", "/v1/*", "/_deepspace/*"]
 
 [[migrations]]
